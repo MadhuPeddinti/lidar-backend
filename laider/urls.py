@@ -24,14 +24,17 @@ from django.views.static import serve
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('creatingproject/', views.creatingProject),
-    path('gettingAllProjects/', views.gettingAllProjects),
     path('creatingtaskandfileupload/', views.creatingTaskAndFileUpload),
+    path('gettingAllProjects/', views.gettingAllProjects),
     path('deletingtasks/',views.deletingTasks),
     path('deletingprojects/', views.deletingProject),
     path('downloadinglasfiles/', views.downloadingLasFiles),
     path('updatingprojects/',views.updatingProject),
     path('updatingtasks/', views.updatingTasks),
     path('combiningtasks/', views.combining_tasks),
+    path('registration/', views.registration),
+    path('login/',views.login),
+    path('memoryusage/',views.memory),
 ]
 
 # if settings.DEBUG:

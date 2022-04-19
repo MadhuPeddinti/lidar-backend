@@ -10,23 +10,24 @@ from django.http import JsonResponse, HttpResponse, Http404
 from django.template.defaulttags import url
 from django.utils.encoding import smart_str
 import requests
-from laider.settings import MEDIA_ROOT
+from laider.settings import MEDIA_ROOT, MEDIA_URL
 from laider import settings
 from laiderapp import models
 from django.shortcuts import render
 
 # Create your views here.
-from laiderapp.models import creatingproject, las_files
+from laiderapp.models import creatingproject, las_files, user_registration
 from django.views.decorators.csrf import csrf_exempt
 from django.core.files.storage import FileSystemStorage
 from django.views.decorators.csrf import ensure_csrf_cookie
 from wsgiref.util import FileWrapper
 from laiderapp import multi_view_loader
-
-
+import jwt
 import shutil
+import humanize
 import re
 from laiderapp import potree_automation
+import bcrypt
 @csrf_exempt
 def creatingProject(request):
     if request.method =="POST":
@@ -62,9 +63,9 @@ def gettingAllProjects(request):
             projects =list(creatingproject.objects.filter().values('PROJECT_TITLE','DESCRIPTION'))
 
             for i in range(len(projects)):
-                tasks = list(las_files.objects.filter(PROJECT=projects[i]['PROJECT_TITLE']).values('PROJECT','id','TASK','POTREE_HTML_FILE','DATE','FILE'))
+                tasks = list(las_files.objects.filter(PROJECT=projects[i]['PROJECT_TITLE']).values('PROJECT','id','TASK','POTREE_HTML_FILE','DATE','FILE','POTREE_PUBLIC_HTML_FILE'))
                 list_of_tasks.append(tasks)
-
+            # print(list_of_tasks)
             x = 0
             for i in projects:
                 i['task']= list_of_tasks[x]
@@ -90,10 +91,13 @@ def creatingTaskAndFileUpload(request):
             task = request.POST.get('task')
             date = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
             # date = str(date).replace(" ","_")
-
-            task_name = task+'_'+str(date)
-            dir = MEDIA_ROOT+"/media/"+str(myfiles)
-            # fs = FileSystemStorage(dir)
+            task_ = task.replace(" ", "_")
+            task_name = task_+'_'+str(date)
+            # dir = MEDIA_ROOT+str(myfiles)
+            dir = os.path.join(MEDIA_ROOT, MEDIA_URL, str(myfiles))
+            print(str(myfiles))
+            print("dir",dir)
+            # # fs = FileSystemStorage(dir)
 
             projects_in_db = list(creatingproject.objects.filter(PROJECT_TITLE=project_title).values('PROJECT_TITLE'))
             print("projects_in_db",projects_in_db)
@@ -111,8 +115,9 @@ def creatingTaskAndFileUpload(request):
                     # print(final_file_path)
                     potree_automation.las_convertor(dir,task_name)
                     potree_html_path = "http://10.91.97.120:1234/examples/"+task_name+".html"
+                    potree_public_html_path = "http://10.91.97.120:1234/public/"+task_name+".html"
 
-                    las_files(PROJECT=projects_in_db[0]['PROJECT_TITLE'],TASK=task_name,IS_ACTIVE=True,IS_CONVERTED=False,POTREE_HTML_FILE=potree_html_path, FILE=myfiles).save()
+                    las_files(PROJECT=projects_in_db[0]['PROJECT_TITLE'],TASK=task_name,IS_ACTIVE=True,IS_CONVERTED=False,POTREE_HTML_FILE=potree_html_path, FILE=myfiles,POTREE_PUBLIC_HTML_FILE=potree_public_html_path).save()
 
 
                     return JsonResponse({'message': 'task created and file uploaded successfully', 'status_code': 200})
@@ -140,7 +145,7 @@ def deletingTasks(request):
             data = json.loads(request.body)
             title = data['project_title']
             task = data['task_name']
-            date_from_db = data['date']
+            # date_from_db = data['date']
             file = data['file']
             print("title",title)
             tasks_from_db = list(las_files.objects.filter(PROJECT=title,TASK=task))
@@ -310,28 +315,68 @@ def updatingTasks(request):
         else:
             return JsonResponse({'message': 'method not allowed', 'status': 405})
 
+def my_join(MEDIA_ROOT,p):
+    print('p --- ',p)
+    new = MEDIA_ROOT
+    for q in p:
+        new = os.path.join(new,q)
+    print(new)
+    return new
 
 @csrf_exempt
 def combining_tasks(request):
     if request.method == 'POST':
         try:
-            # data = json.loads(request.body)
-            # new_task_name = data['task_name']
-            # task_list = data['task_list']
-            # files = data['lasfiles']
-            # merge = data['merge']
-            new_task_name = 'NEW_MERGED'
-            task_list = ['test2_2022-04-06_16-38-25','test21_2022-04-06_16-38-35','test21_2022-04-06_16-38-45']
-            files = [MEDIA_ROOT+'/'+'media/points.las',MEDIA_ROOT+'/'+'media/points_aMyUpmr.las',MEDIA_ROOT+'/'+'media/points_MD858HJ.las']
+
+            data = json.loads(request.body)
+            project_title = data['project_title']
+            print('project_title',project_title)
+            new_task_name = data['task_name']
+            task_list = data['task_list'] # names of the tasks that we are combining
+            merge = data['merge']
+            date = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
             lasfile_path = MEDIA_ROOT+'/media/'+new_task_name+'.las'
             zip_path = MEDIA_ROOT + '/media/' + new_task_name + '.zip'
-            merge =False
-            output_path = multi_view_loader.multiviewloader(new_task_name,task_list,files,lasfile_path,zip_path,merge)
+
+            file_path_from_db = []
+            for i in task_list:
+                files_from_db = list(las_files.objects.filter(PROJECT=project_title,TASK=i).values('FILE'))
+                file_path_from_db.append(files_from_db)
+
+            files = [i[0]['FILE'] for i in file_path_from_db]
+            # for i in file_path_from_db:
+            #     files.append(i[0]['FILE'])
+            print(files)
+
+            files_path_list2 = [ os.path.split(f) for f in files]
+            print(files_path_list2)
+            files_path_list3 = [my_join(MEDIA_ROOT,list(f)) for f in files_path_list2]
+            print("files_path_list3", files_path_list3)
+
+
+            new_task_name_ = new_task_name.replace(" ","_")+'_'+str(date)
+
+            output_path = multi_view_loader.multiviewloader(new_task_name= new_task_name_, task_list= task_list,
+                                                            files= files_path_list3, lasfile_path=lasfile_path,
+                                                            zip_path= zip_path, merge=merge)
             print(output_path)
+
+            path_for_db = output_path.split('/')[1:]
+            path_for_db = '/'.join(path_for_db)
 
             TODO:'update the response & change the input request fields'
 
-            return JsonResponse({'path':output_path,})
+
+            potree_html_path = "http://10.91.97.120:1234/examples/" + new_task_name_ + ".html"
+            potree_public_html_path = "http://10.91.97.120:1234/public/" + new_task_name_ + ".html"
+
+            las_files(PROJECT=project_title, TASK=new_task_name_, IS_ACTIVE=True,
+                      IS_CONVERTED=False, POTREE_HTML_FILE=potree_html_path, FILE=path_for_db,
+                      POTREE_PUBLIC_HTML_FILE=potree_public_html_path).save()
+
+            return JsonResponse({'message': 'task created and file uploaded successfully', 'status_code': 200})
+
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
             fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
@@ -342,3 +387,106 @@ def combining_tasks(request):
             return JsonResponse({'message': 'internal server error', 'status_code': 500})
     else:
         return JsonResponse({'message': 'method not allowed', 'status': 405})
+
+@csrf_exempt
+def registration(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+
+            user_name = data['user_name']
+            password = data['password']
+            email_id = data['email']
+
+            password = hashing(password)
+            if len(user_registration.objects.filter(USER_NAME = user_name))>0:
+                return JsonResponse({'message':'user already exists', 'status':400})
+
+            user_registration(USER_NAME = user_name,EMAIL= email_id,PASSWORD=password,ROLE = 'user').save()
+            return JsonResponse({'message':'user created successfully', 'status':200})
+        except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            print(exc_type, fname, exc_tb.tb_lineno)
+            print(type(e))  # the exception instance
+            print(e.args)  # arguments stored in .args
+            print('error', e)
+            return JsonResponse({'message': 'internal server error', 'status_code': 500})
+    else:
+        return JsonResponse({'message': 'method not allowed', 'status': 405})
+
+def hashing(password):
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+    return hashed.decode()
+def verifing_password(password, hashed):
+    if bcrypt.checkpw(password.encode(), hashed.encode()):
+        return True
+    else:
+        return JsonResponse({'message':'invalid username or password'})
+@csrf_exempt
+def login(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            user_name = data['user_name']
+            password = data['password']
+
+            logging_user = list(user_registration.objects.filter(USER_NAME=user_name).values())
+            hashed = logging_user[0]['PASSWORD']
+            verified_password = verifing_password(password,hashed)
+
+            payload ={}
+            payload['USER_NAME'] = logging_user[0]['USER_NAME']
+            payload['EMAIL'] = logging_user[0]['EMAIL']
+            payload['ROLE'] = logging_user[0]['ROLE']
+
+            if len(logging_user)==0:
+                return JsonResponse({'message':'user does not exists', 'status':400})
+
+            if logging_user[0]['USER_NAME'] == user_name and verified_password:
+
+                token = jwt.encode(payload, key='secret_ket')#.decode('utf-8')
+                print('token', token)
+
+                return JsonResponse({'token':str(token),'message':'logged in successfully','status':200})
+            else:
+                return JsonResponse({'message':'invalid username or password', 'status':400})
+
+        except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            print(exc_type, fname, exc_tb.tb_lineno)
+            print(type(e))  # the exception instance
+            print(e.args)  # arguments stored in .args
+            print('error', e)
+            return JsonResponse({'message': 'internal server error', 'status_code': 500})
+    else:
+        return JsonResponse({'message': 'method not allowed', 'status': 405})
+
+
+def memory_usage(path):
+
+    total,used,free = shutil.disk_usage(path)
+    Total = humanize.naturalsize(total,binary=True)
+    Free = humanize.naturalsize(free,binary=True)
+    Used = humanize.naturalsize(used,binary=True)
+
+    return Total,Free,Used
+
+def memory(request):
+    if request.method == 'GET':
+        try:
+            path = 'D:/'
+            total, free, used = memory_usage(path)
+            print(total, free, used)
+            return JsonResponse({'total':total,'free':free,'used':used,'status':200})
+        except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            print(exc_type, fname, exc_tb.tb_lineno)
+            print(type(e))  # the exception instance
+            print(e.args)  # arguments stored in .args
+            print('error', e)
+            return JsonResponse({'message': 'internal server error', 'status_code': 500})
+    else:
+        return JsonResponse({'message':'method not allowed', 'status':405})
